@@ -4,8 +4,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import adjusted_rand_score
 
-from exceptions import CFEWarning, ModelNotFittedError
-from helpers import (exp_sum_u_ij_t, get_dom_vals_and_size)
+from exceptions import ModelNotFittedError
+from helpers import (check_params, get_randn, exp_sum_u_ij_t,
+                     get_dom_vals_and_size)
 
 
 class CFE():
@@ -33,7 +34,7 @@ class CFE():
 
     Attributes
     ----------
-    partition_matrix : ndarray of shape (n_samples, n_clusters)
+    u : ndarray of shape (n_samples, n_clusters)
         The partition matrix after at the convergence.
 
     cluster_centers : ndarray of shape (n_attr_doms, n_clusters)
@@ -58,27 +59,32 @@ class CFE():
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> from cfe import CFE
-    >>> soybean_df = pd.read_csv("https://archive.ics.uci.edu/ml/machine-learning-databases/soybean/soybean-small.data")
-    >>> soybean_df.columns = [f"A{i}" for i in range(1, soybean_df.shape[1] + 1)]
-    >>> true_labels = soybean_df.A36.values # Last column correspond to the objects classes.
-    >>> soybean_df = soybean_df.drop("A36", axis=1)
-    >>> X = soybean_df.values
-    >>> features = list(soybean_df)
-    >>> cfe = CFE(n_clusters=4, m=1.1, verbose=False)
-    >>> cfe.fit(X)
-    >>> scores = cfe.score(X, true_labels)
+    `
+    import pandas as pd
+    from cfe import CFE
+    soybean_df = pd.read_csv("https://archive.ics.uci.edu/ml/machine-learning-databases/soybean/soybean-small.data")
+    soybean_df.columns = [f"A{i}" for i in range(1, soybean_df.shape[1] + 1)]
+    true_labels = soybean_df.A36.values # Last column corresponds to the objects classes.
+    soybean_df = soybean_df.drop("A36", axis=1)
+    X = soybean_df.values
+    features = list(soybean_df)
+    cfe = CFE(n_clusters=4, m=1.1, verbose=False)
+    cfe.fit(X, features)
+    ari = cfe.ari(true_labels)
+    print("Scores")
+    print("Partition coefficient: ", cfe.pe)
+    print("Partition entropy: ", cfe.pc)
+    print("ARI: ", ari)
+    `
 
-    References
+    Citations
     ----------
-    - A. J. Djiberou Mahamadou, V. Antoine, E. M. Nguifo and S. Moreno,
+    > A. J. Djiberou Mahamadou, V. Antoine, E. M. Nguifo and S. Moreno,
     "Categorical fuzzy entropy c-means" 2020 IEEE International Conference on Fuzzy Systems (FUZZ-IEEE),
     Glasgow, United Kingdom, 2020, pp. 1-6, doi: 10.1109/FUZZ48607.2020.9177666.
-    - Abdoul Jalil Djiberou Mahamadou, Violaine Antoine, Engelbert Mephu Nguifo, Sylvain Moreno,
+    > Abdoul Jalil Djiberou Mahamadou, Violaine Antoine, Engelbert Mephu Nguifo, Sylvain Moreno,
     “Apport de l'entropie pour les c-moyennes floues sur des données catégorielles”, EGC 2021, vol. RNTI-E-37.
     """
-
     def __init__(self,
                  n_clusters,
                  m=1.2,
@@ -95,38 +101,6 @@ class CFE():
         self.seed = seed
         self._is_fitted = False
 
-    def _check_params(self, X):
-        """Check the correcteness of input parameters."""
-        if self.n_clusters < 2:
-            raise ValueError("n_clusters should be >= 2.")
-        if self.n_clusters > self.n_samples:
-            raise ValueError(f"n_clusters should be <= {self.n_samples}")
-        if self.m < 1:
-            raise ValueError("m should be > 1.")
-        if self.alpha < 0:
-            raise ValueError("alpha should be > 0.")
-        if self.epsillon < 0:
-            raise ValueError("epsillon should be > 0.")
-        if not isinstance(self.verbose, bool):
-            raise ValueError("verbose should be a Boolean.")
-
-        attr_with_one_uniq_val = list()
-        for l in range(X.shape[1]):
-            _, uniq_vals = np.unique(X[:, l], return_counts=True)
-            n_l = len(uniq_vals)
-            if n_l == 1:
-                attr_with_one_uniq_val.append(l)
-        if attr_with_one_uniq_val:
-            message = f"Attributes {attr_with_one_uniq_val} contain one unique value, they will be dropped before training."
-            warnings.warn(message, category=CFEWarning, stacklevel=0)
-        X = np.delete(X, attr_with_one_uniq_val, axis=1)
-        return X
-
-    def _get_randn(self, n_l):
-        rand_num = np.abs(np.random.randn(n_l))
-        rand_num /= np.sum(rand_num)
-        return rand_num
-
     def _init_centers(self):
         """Initialize the cluster centers."""
         w0 = np.zeros((np.sum(self.n_attr_doms), self.n_clusters),
@@ -137,8 +111,8 @@ class CFE():
             l = 0
             for n_l in self.n_attr_doms:
                 l += n_l
-                rand_num = self._get_randn(n_l)
-                w0[k:l, j] = rand_num
+                randn = get_randn(n_l)
+                w0[k:l, j] = randn
                 k = l
         return w0
 
@@ -173,7 +147,7 @@ class CFE():
                 dist[i, j] = sum_
         return dist
 
-    def _update_partition_matrix(self, dist):
+    def _update_u(self, dist):
         """Update the partition matrix given the distances between objects and cluster centers."""
         n = dist.shape[0]
         u = np.zeros((n, self.n_clusters), dtype='float')
@@ -288,6 +262,16 @@ class CFE():
                 m = s
         return w
 
+    def _pe(self):
+        """Compute the partition entroppy coefficient score with 1 the optimal value."""
+        pe = np.sum(-self.u * np.log(self.u)).sum() / self.n_samples
+        return round(pe, 2)
+
+    def _pc(self):
+        """Compute the partition coefficient score with 0 the optimal value."""
+        pc = np.sum(self.u**2).sum() / self.n_samples
+        return round(pc, 2)
+
     def fit(self, X, features):
         """Fit the CFE model.
 
@@ -304,9 +288,9 @@ class CFE():
         self
             Fitted model.
         """
-        self.n_samples, self.n_features = X.shape
         self.attr_names = features
-        X = self._check_params(X)
+        X = check_params(self, X)
+        self.n_samples, self.n_features = X.shape
         dom_vals, attr_dom_n_l = get_dom_vals_and_size(X)
         self._dom_vals = dom_vals
         self.n_attr_doms = attr_dom_n_l
@@ -318,7 +302,7 @@ class CFE():
         not_finished = True
         while not_finished:
             dist = self._distance_objects_to_clusters(X, w)
-            u = self._update_partition_matrix(dist)
+            u = self._update_u(dist)
             w = self._update_cluster_centers(X, u)
             new_cost = self._cost(u, dist, w)
             not_finished = np.abs(new_cost - old_cost) > self.epsillon
@@ -331,11 +315,13 @@ class CFE():
             old_cost = new_cost
         self._is_fitted = True
         columns = [f'C{i + 1}' for i in range(self.n_clusters)]
-        self.partition_matrix = pd.DataFrame(u, columns=columns)
+        self.u = pd.DataFrame(u, columns=columns)
         self.crisp_labels = np.argmax(u, axis=1)
         self.cluster_centers = pd.DataFrame(w, columns=columns)
         self.history = costs
         self.n_iter = n_iter
+        self.pe = self._pe()
+        self.pc = self._pc()
         return self
 
     def get_dict_centers(self):
@@ -376,31 +362,30 @@ class CFE():
             raise ModelNotFittedError(
                 "Please fit the model before using the predict method.")
         dist = self._distance_objects_to_clusters(X, self.cluster_centers)
-        u = self._update_partition_matrix(dist)
+        u = self._update_u(dist)
         labs = np.argmax(u, axis=1)
         return labs
 
-    def score(self, y_true):
+    def ari(self, y_true):
         """Computes the rand adjusted index (ARI)
+
         The ARI is computed between the ground truth classes and the predicted ones.
+        The optimal value of the ARI score is 1.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features).
-            The objects to predict their classes.
-        y : array-like of shape (n_samples,)
-            The ground truth classes of the object.
-        metrics : list of metrics to compute, default=.
+        y_true : ndarray of shape (n_samples,)
+            The ground truth classes of objects.
 
         Returns
         -------
-        self.scores : list of scores, shape (len(metrics))
-            The list of computed scores.
+        ari : float
+            The adjusted rand index score.
         """
         if not self._is_fitted:
             raise ModelNotFittedError(
                 "Please fit the model before using the predict method.")
-
         ari = adjusted_rand_score(self.crisp_labels, y_true)
+        ari = round(ari, 2)
         self.ari = ari
-        return self.ari
+        return ari
