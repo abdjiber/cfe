@@ -1,5 +1,7 @@
-import numpy as np
 import warnings
+
+import numpy as np
+
 from exceptions import CFEWarning
 
 
@@ -125,3 +127,39 @@ def exp_sum_u_ij_t(um, X, a_l, j, l, t, alpha):
     freq = np.sum(um[np.array(X[:, l]) != a_l[t], j])
     exp_sum = np.exp(-freq / (n_samples * alpha))
     return exp_sum
+
+
+def get_dict_centers(cfe):
+    """Transform the cluster centers to dictionnary.
+
+    Parameters
+    ----------
+    cfe : CFE
+        A CFE instance.
+
+    Returns
+    -------
+    dict_centers_fuzz : dict
+        The fuzzy centers in dictionary format.
+
+    dict_centers_hard : dict
+        The hard centers in dictionary format.
+    """
+    dict_centers_fuzz = {}
+    dict_centers_hard = {}
+    centers = cfe.cluster_centers.values
+    for j in range(cfe.n_clusters):
+        s = 0
+        m = 0
+        sub_clust_attr_fuzz = []
+        sub_clust_attr_hard = []
+        for n_l in cfe.n_attr_doms:
+            s += n_l
+            w_jl = centers[m:s, j]
+            a_l = cfe._dom_vals[m:s]
+            sub_clust_attr_fuzz.append(list(zip(a_l, w_jl)))
+            sub_clust_attr_hard.append(list(zip(a_l, w_jl.round(0))))
+            m = s
+        dict_centers_fuzz[f'cluster {j + 1}'] = sub_clust_attr_fuzz
+        dict_centers_hard[f'cluster {j + 1}'] = sub_clust_attr_hard
+    return dict_centers_fuzz, dict_centers_hard
