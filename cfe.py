@@ -2,11 +2,10 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import adjusted_rand_score
 
 from exceptions import ModelNotFittedError
-from helpers import (check_params, get_randn, exp_sum_u_ij_t,
-                     get_dom_vals_and_size)
+import helpers
+import metrics
 
 
 class CFE():
@@ -59,25 +58,21 @@ class CFE():
 
     Examples
     --------
-    `
-    import pandas as pd
-    from cfe import CFE
-    soybean_df = pd.read_csv("https://archive.ics.uci.edu/ml/machine-learning-databases/soybean/soybean-small.data")
-    soybean_df.columns = [f"A{i}" for i in range(1, soybean_df.shape[1] + 1)]
-    true_labels = soybean_df.A36.values # Last column corresponds to the objects classes.
-    soybean_df = soybean_df.drop("A36", axis=1)
-    X = soybean_df.values
-    features = list(soybean_df)
-    cfe = CFE(n_clusters=4, m=1.1, verbose=False)
-    cfe.fit(X, features)
-    ari = cfe.ari(true_labels)
-    print("Scores")
-    print("Partition coefficient: ", cfe.pe)
-    print("Partition entropy: ", cfe.pc)
-    print("ARI: ", ari)
-    `
+        import pandas as pd
+        from cfe import CFE
+        soybean_df = pd.read_csv("https://archive.ics.uci.edu/ml/machine-learning-databases/soybean/soybean-small.data")
+        soybean_df.columns = [f"A{i}" for i in range(1, soybean_df.shape[1] + 1)]
+        true_labels = soybean_df.A36.values # Last column corresponds to the objects classes.
+        soybean_df = soybean_df.drop("A36", axis=1)
+        X = soybean_df.values
+        features = list(soybean_df)
+        cfe = CFE(n_clusters=4, m=1.1, verbose=False)
+        cfe.fit(X, features)
+        print("Scores")
+        print("Partition coefficient: ", cfe.pe)
+        print("Partition entropy: ", cfe.pc)
 
-    Citations
+    References
     ----------
     > A. J. Djiberou Mahamadou, V. Antoine, E. M. Nguifo and S. Moreno,
     "Categorical fuzzy entropy c-means" 2020 IEEE International Conference on Fuzzy Systems (FUZZ-IEEE),
@@ -111,7 +106,7 @@ class CFE():
             l = 0
             for n_l in self.n_attr_doms:
                 l += n_l
-                randn = get_randn(n_l)
+                randn = helpers.get_randn(n_l)
                 w0[k:l, j] = randn
                 k = l
         return w0
@@ -149,9 +144,8 @@ class CFE():
 
     def _update_u(self, dist):
         """Update the partition matrix given the distances between objects and cluster centers."""
-        n = dist.shape[0]
-        u = np.zeros((n, self.n_clusters), dtype='float')
-        for i in range(n):
+        u = np.zeros((self.n_samples, self.n_clusters), dtype='float')
+        for i in range(self.n_samples):
             for j in range(self.n_clusters):
                 if 0 in dist[i, :]:
                     u[i, :] = 0
@@ -184,10 +178,9 @@ class CFE():
         cost : float
             The cost of an iteration.
         """
-        n = u.shape[0]
         cost_base = np.sum(u**self.m * d**2)
         entropy = np.sum(w * np.log(w))
-        cost = cost_base + n * self.alpha * entropy
+        cost = cost_base + self.n_samples * self.alpha * entropy
         cost = np.round(cost, 3)
         return cost
 
@@ -225,10 +218,10 @@ class CFE():
         sum_u_ij = 0.0
         list_ = list()
         for t in range(n_l):
-            sum_u_ij += exp_sum_u_ij_t(um, X, a_l, j, l, t, self.alpha)
-            list_.append(exp_sum_u_ij_t(um, X, a_l, j, l, t, self.alpha))
+            sum_u_ij += helpers.exp_sum_u_ij_t(um, X, a_l, j, l, t, self.alpha)
+            list_.append(helpers.exp_sum_u_ij_t(um, X, a_l, j, l, t, self.alpha))
         for t in range(n_l):
-            w_jl[t] = exp_sum_u_ij_t(um, X, a_l, j, l, t,
+            w_jl[t] = helpers.exp_sum_u_ij_t(um, X, a_l, j, l, t,
                                      self.alpha) / sum_u_ij
         return w_jl
 
@@ -262,16 +255,6 @@ class CFE():
                 m = s
         return w
 
-    def _pe(self):
-        """Compute the partition entroppy coefficient score with 1 the optimal value."""
-        pe = np.sum(-self.u * np.log(self.u)).sum() / self.n_samples
-        return round(pe, 2)
-
-    def _pc(self):
-        """Compute the partition coefficient score with 0 the optimal value."""
-        pc = np.sum(self.u**2).sum() / self.n_samples
-        return round(pc, 2)
-
     def fit(self, X, features):
         """Fit the CFE model.
 
@@ -289,9 +272,9 @@ class CFE():
             Fitted model.
         """
         self.attr_names = features
-        X = check_params(self, X)
+        X = helpers.check_params(self, X)
         self.n_samples, self.n_features = X.shape
-        dom_vals, attr_dom_n_l = get_dom_vals_and_size(X)
+        dom_vals, attr_dom_n_l = helpers.get_dom_vals_and_size(X)
         self._dom_vals = dom_vals
         self.n_attr_doms = attr_dom_n_l
         old_cost = np.inf
@@ -320,30 +303,9 @@ class CFE():
         self.cluster_centers = pd.DataFrame(w, columns=columns)
         self.history = costs
         self.n_iter = n_iter
-        self.pe = self._pe()
-        self.pc = self._pc()
+        self.pe = metrics.pe(self.u)
+        self.pc = metrics.pc(self.u)
         return self
-
-    def get_dict_centers(self):
-        """Transform the cluster centers to dictionnary."""
-        dict_centers_fuzz = {}
-        dict_centers_hard = {}
-        centers = self.cluster_centers.values
-        for j in range(self.n_clusters):
-            s = 0
-            m = 0
-            sub_clust_attr_fuzz = []
-            sub_clust_attr_hard = []
-            for l, n_l in enumerate(self.n_attr_doms):
-                s += n_l
-                w_jl = centers[m:s, j]
-                a_l = self._dom_vals[m:s]
-                sub_clust_attr_fuzz.append(list(zip(a_l, w_jl)))
-                sub_clust_attr_hard.append(list(zip(a_l, w_jl.round(0))))
-                m = s
-            dict_centers_fuzz[f'cluster {j + 1}'] = sub_clust_attr_fuzz
-            dict_centers_hard[f'cluster {j + 1}'] = sub_clust_attr_hard
-        return dict_centers_fuzz, dict_centers_hard
 
     def predict(self, X):
         """Perfom a prediction new objects intances.
@@ -355,37 +317,15 @@ class CFE():
 
         Returns
         -------
-        self.labels: array of shape n_samples
-            The predicted clusters of the new objects intances.
+        u : array of shape (n_samples, n_clusters)
+            The predicted fuzzy partition of the new objects intances.
         """
         if not self._is_fitted:
             raise ModelNotFittedError(
                 "Please fit the model before using the predict method.")
-        dist = self._distance_objects_to_clusters(X, self.cluster_centers)
+        self.n_samples = X.shape[0]
+        dist = self._distance_objects_to_clusters(X, self.cluster_centers.values)
         u = self._update_u(dist)
-        labs = np.argmax(u, axis=1)
-        return labs
-
-    def ari(self, y_true):
-        """Computes the rand adjusted index (ARI)
-
-        The ARI is computed between the ground truth classes and the predicted ones.
-        The optimal value of the ARI score is 1.
-
-        Parameters
-        ----------
-        y_true : ndarray of shape (n_samples,)
-            The ground truth classes of objects.
-
-        Returns
-        -------
-        ari : float
-            The adjusted rand index score.
-        """
-        if not self._is_fitted:
-            raise ModelNotFittedError(
-                "Please fit the model before using the predict method.")
-        ari = adjusted_rand_score(self.crisp_labels, y_true)
-        ari = round(ari, 2)
-        self.ari = ari
-        return ari
+        columns = [f'C{i + 1}' for i in range(self.n_clusters)]
+        u = pd.DataFrame(u, columns=columns)
+        return u
